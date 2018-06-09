@@ -8,21 +8,9 @@ reload(sys)
 sys.setdefaultencoding('utf-8')
 import numpy as np
 import tensorflow as tf
-from data_utils import minibatches
+from data_utils import minibatches, load_data
 import logging
-
-class Config():
-    def __init__(self, embedding, dim_word, dim_lstm=256, nlabels=6, learning_rate=0.1, lr_decay=0.1, dropout=1.0, batch_size=40, output_path=os.getcwd(), nepoch=10):
-        self.embedding = embedding
-        self.dim_word = dim_word
-        self.dim_lstm = dim_lstm
-        self.nlabels = nlabels
-        self.learning_rate = learning_rate
-        self.lr_decay = lr_decay
-        self.dropout = dropout
-        self.batch_size = batch_size
-        self.output_path = output_path
-        self.nepoch = nepoch
+from config import config
 
 class sentimentModel(object):
     def __init__(self, config):
@@ -42,30 +30,30 @@ class sentimentModel(object):
 
     def add_word_embeddings_op(self):
         with tf.variable_scope("words"):
-            _word_embeddings = tf.Variable(self.config.embedding, name="_word_embeddings", dtype=tf.float32, trainable=True)
+            _word_embeddings = tf.Variable(load_data(self.config.embedding_data), name="_word_embeddings", dtype=tf.float32, trainable=True)
             word_embeddings = tf.nn.embedding_lookup(_word_embeddings, self.data_x, name="word_embeddings")
         self.word_embeddings = tf.nn.dropout(word_embeddings, self.config.dropout)
 
     def add_logits_op(self):
         with tf.variable_scope("bi-lstm"):
-            lstm_cell = tf.contrib.rnn.LSTMCell(self.config.dim_lstm)
+            lstm_cell = tf.contrib.rnn.LSTMCell(self.config.dim_rnn)
             _, (output_state_fw, output_state_bw) = tf.nn.bidirectional_dynamic_rnn(lstm_cell, lstm_cell, self.word_embeddings, sequence_length=self.data_length, dtype=tf.float32)
             lstm_output = tf.concat((output_state_fw.h, output_state_bw.h), axis=-1)
             lstm_output = tf.nn.dropout(lstm_output, self.config.dropout)
 
         with tf.variable_scope("proj"):
-            W = tf.get_variable("W", shape=[2*self.config.dim_lstm, self.config.nlabels], dtype=tf.float32)
+            W = tf.get_variable("W", shape=[2*self.config.dim_rnn, self.config.nlabels], dtype=tf.float32)
             b = tf.get_variable("b", shape=[self.config.nlabels], dtype=tf.float32, initializer=tf.zeros_initializer())
-        lstm_output = tf.reshape(lstm_output, [-1, 2*self.config.dim_lstm])
+        lstm_output = tf.reshape(lstm_output, [-1, 2*self.config.dim_rnn])
         pred = tf.matmul(lstm_output, W) + b
         self.logits=pred
 
     def add_pred_op(self): 
-	self.score = tf.nn.softmax(self.logits)
-	self.labels_pred = tf.cast(tf.argmax(self.logits, axis=-1), tf.int32)
-	_accuracy = tf.equal(self.labels_pred, self.data_y)
-	self.acc = tf.reduce_mean(tf.cast(_accuracy,tf.float32))
-	tf.summary.scalar("accuracy", self.acc)
+        self.score = tf.nn.softmax(self.logits)
+        self.labels_pred = tf.cast(tf.argmax(self.logits, axis=-1), tf.int32)
+        _accuracy = tf.equal(self.labels_pred, self.data_y)
+        self.acc = tf.reduce_mean(tf.cast(_accuracy,tf.float32))
+        tf.summary.scalar("accuracy", self.acc)
 
     def add_loss_op(self):
         _loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.data_y)
@@ -82,7 +70,7 @@ class sentimentModel(object):
 
     def add_summary(self, sess):
         self.merged = tf.summary.merge_all()
-        self.file_writer = tf.summary.FileWriter('./graph', sess.graph)
+        self.file_writer = tf.summary.FileWriter(self.config.filewriter_path, sess.graph)
 
     def build(self):
         self.add_placeholders()
@@ -133,15 +121,15 @@ class sentimentModel(object):
             _, loss, summary = sess.run([self.train_op, self.loss, self.merged], feed_dict=fd)
             total_loss += loss
             if i % 100000 == 0:
-		acc = self.run_eval(sess,dev)
-		self.file_writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='eval_acc',simple_value=acc)]),epoch)
+                acc = self.run_eval(sess,dev)
+                self.file_writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='eval_acc',simple_value=acc)]),epoch)
             batch_cnt += 1
-	    if i % 20 == 0:
-		self.file_writer.add_summary(summary, epoch * nbatches + i)
+        if i % 20 == 0:
+            self.file_writer.add_summary(summary, epoch * nbatches + i)
             if i % 1000 == 0:
                 print("batch {}, loss {:04.2f}.".format(i, float(total_loss)/batch_cnt))
         acc = self.run_eval(sess, dev)
-	#self.file_writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='eval_acc',simple_value=acc)]),epoch)
+    #self.file_writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='eval_acc',simple_value=acc)]),epoch)
         print("- dev acc {:04.2f} - f1 {:04.2f}".format(100 * acc, 100 * 0))
         return acc
 
@@ -180,16 +168,16 @@ class sentimentModel(object):
             acc = self.run_eval(sess, test)
             print("- test acc {:04.2f} - f1 {:04.2f}".format(100 * acc, 100 * 0))
 
-    def annotate(self, test):
-	#print test
-	saver = tf.train.Saver()
-        pred_list = []
-	score_list = []
-	with tf.Session() as sess:
-	    saver.restore(sess, self.config.output_path)
-	    for words in test:
-		fd, sequence_length = self.get_feed_dict([words],  dropout=1.0)
-            	pred, score = sess.run([self.labels_pred, self.score], feed_dict=fd)
-		pred_list.append(pred[0])
-		score_list.append(score[0][pred[0]])
-	return pred_list,score_list 
+ #    def annotate(self, test):
+    # #print test
+    # saver = tf.train.Saver()
+ #        pred_list = []
+    # score_list = []
+    # with tf.Session() as sess:
+    #     saver.restore(sess, self.config.output_path)
+    #     for words in test:
+    #     fd, sequence_length = self.get_feed_dict([words],  dropout=1.0)
+ #                pred, score = sess.run([self.labels_pred, self.score], feed_dict=fd)
+    #     pred_list.append(pred[0])
+    #     score_list.append(score[0][pred[0]])
+    # return pred_list,score_list 

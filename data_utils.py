@@ -10,22 +10,16 @@ import codecs
 import copy
 import json
 import pickle
+from gensim.models.word2vec import Word2Vec
 
-def read_data_ecm(datadir,numlabels):
-    x,y = [[],[]]
-    datafile = codecs.open(datadir,'r','utf-8')
-    jsonfile = json.load(datafile)
-    for idx,item in enumerate(jsonfile):
-        for dataitem in item:
-            #sentence
-            sentence = dataitem[0].strip().split(' ')
-            x.append([word.strip() for word in sentence])
-            #label
-            # y_tmp = [0 for i in range(numlabels)]
-            # y_tmp[dataitem[1]] = 1
-            y.append(int(dataitem[1]))
-    datafile.close()
-    return x,y
+def train_word2vec(datadir, savedir, dimword, min_count):
+    print 'training word to vector model from ', datadir
+    x = []
+    datafile = codecs.open(datadir, 'r', 'utf-8')
+    for line in datafile:
+        x.append([word.strip() for word in line.split('\t')[1].strip().split(' ')])
+    model = Word2Vec(x, size=dimword, min_count=min_count)
+    model.save_word2vec_format(savedir ,binary=False)
 
 def generate_dict(dictdir, dimword):
     dictfile = codecs.open(dictdir,'r','utf-8')
@@ -60,29 +54,7 @@ def transform_data(_data, num_map):
                 data[i][j] = 0 #UNK
     return data, missing_list
 
-def read_data_NLPCC_2014(datadir):
-    x,y = [[],[]]
-    datafile = codecs.open(datadir,'r','utf-8')
-    for line in datafile.readlines():
-        label, sentence = line.split('\t')
-	sentence = sentence.strip().split(' ')
-        x.append([word.strip() for word in sentence])
-        y.append(int(label))
-    datafile.close()
-    return x,y
-
-def read_data_crawl(datadir):
-    x = []
-    datafile = codecs.open(datadir,'r','utf-8')
-    for line in datafile.readlines():
-	sentences = line.strip().split('\t')
-        _x = []
-	for sentence in sentences:
-	    _x.append([word.strip() for word in sentence.strip()])
-	x.append(_x[:])
-    return x
-
-def read_data_test(datadir):
+def read_data(datadir):
     x,y = [[],[]]
     datafile = codecs.open(datadir,'r','utf-8')
     for line in datafile.readlines():
@@ -108,6 +80,12 @@ def combine(x,y):
         data.append((x[i],y[i]))
     return data
 
+def data_split(data, ratio):
+    split_index = int(len(data) * ratio)
+    train = data[:split_index]
+    dev = data[split_index:]
+    return train, dev
+
 def minibatches(data, minibatch_size):
     x_batch, y_batch = [], []
     for (x,y) in data:
@@ -120,44 +98,27 @@ def minibatches(data, minibatch_size):
     if len(x_batch) != 0:
         yield x_batch, y_batch
 
-def generate_train():
+def generate_train(traindir,w2vdir,dimword,save_train,save_w2v,save_map):
     print 'read'
-    #x,y = read_data_ecm("data/train.json",6)
-    #x,y = read_data_NLPCC_2014("data/2014_data.txt")
-    x,y = read_data_test("data/test_data_2014.txt")
-    #x.extend(_x)
-    #y.extend(_y)
-    #dev_x,dev_y = read_data_NLPCC_2014("data/dev.txt")
+    x,y = read_data(traindir)
     print 'generate'
-    num_map, w2v = generate_dict('data/vector_2014_full_200.txt',200)
-    print len(w2v),w2v[1]
+    num_map, w2v = generate_dict(w2vdir, dimword)
     print 'transform'
-    x,missing_list = transform_data(x,num_map)
-    #dev_x,dev_missing_list = transform_data(dev_x,num_map)
-    #print 'missing_x: ',len(set(missing_list))
-    #print 'missing_dev_x: ',len(set(dev_missing_list))
-    test_data = combine(x,y)
-    random.shuffle(test_data)
-    #dev_data = combine(dev_x,dev_y)
-    #random.shuffle(dev_data)
-    #print len(train_data)
-    #print len(dev_data)
+    _x,missing_list = transform_data(x,num_map)
+    data = combine(_x,y)
+    print "total num: ", len(data)
     print 'saving'
-    #save_data(train_data[:100000],'train_mini_data.pkl')
-    save_data(test_data,'test_data_2014.pkl')
-    #save_data(dev_data,'dev_data.pkl')
-    #save_data(w2v,'w2v.pkl')
-    #save_data(num_map,'map.pkl')
+    save_data(data,save_train)
+    save_data(w2v,save_w2v)
+    save_data(num_map,save_map)
 
-def generate_test():
-    x = read_data_crawl('data/crawl.txt')  
+def generate_test(testdir,w2vdir,dimword):
+    x = read_data(testdir)
     #print len(x), x[0]
-    num_map, w2v = generate_dict('data/vector.txt',100)
+    num_map, w2v = generate_dict(w2vdir,dimword)
     trans_x = []
     for sentences in x:
         trans_x.append(transform_data(sentences,num_map)[0])
-    #print x[0]
-    #print trans_x[0]
     save_data(x,'src_test_data.pkl')
     save_data(trans_x,'test_data.pkl')
     	
